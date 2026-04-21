@@ -8,8 +8,8 @@ Quick start::
 
     import pytera
 
-    # One-off render — no engine needed
-    out = pytera.render_once("Hello, {{ name }}!", {"name": "Amjad"})
+    # Inline render — no engine needed
+    out = pytera.render_str("Hello, {{ name }}!", {"name": "Alex"})
 
     # File-based engine
     engine = pytera.TeraEngine("templates/**/*.html")
@@ -19,6 +19,6 @@ Quick start::
     html = engine.render_str("<b>{{ msg }}</b>", {"msg": "hi"})
 """
 
-from .pytera import TeraEngine, render_once
+from .pytera import TeraEngine, render_str
 
-__all__ = ["TeraEngine", "render_once"]
+__all__ = ["TeraEngine", "render_str"]

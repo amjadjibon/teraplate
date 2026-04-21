@@ -52,7 +52,7 @@ impl TeraEngine {
     ///
     /// Example::
     ///
-    ///     html = engine.render("email/welcome.html", {"user": "Amjad"})
+    ///     html = engine.render("email/welcome.html", {"user": "Alex"})
     fn render(&self, template_name: &str, context: &Bound<'_, PyDict>) -> PyResult<String> {
         let ctx = pydict_to_context(context)?;
         self.tera
@@ -93,9 +93,9 @@ fn pydict_to_context(dict: &Bound<'_, PyDict>) -> PyResult<Context> {
     Context::from_value(value).map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
-/// Render a template string in one shot without creating an engine.
+/// Render a template string without creating an engine.
 ///
-/// Convenience function for one-off renders. There is no caching — every
+/// There is no caching — every
 /// call parses and renders the template from scratch. For repeated rendering
 /// of the same template prefer :class:`TeraEngine`.
 ///
@@ -112,10 +112,10 @@ fn pydict_to_context(dict: &Bound<'_, PyDict>) -> PyResult<Context> {
 ///
 /// Example::
 ///
-///     out = render_once("Hello, {{ name }}! You have {{ count }} messages.",
-///                       {"name": "Amjad", "count": 42})
+///     out = render_str("Hello, {{ name }}! You have {{ count }} messages.",
+///                      {"name": "Alex", "count": 42})
 #[pyfunction]
-fn render_once(template_str: &str, context: &Bound<'_, PyDict>) -> PyResult<String> {
+fn render_str(template_str: &str, context: &Bound<'_, PyDict>) -> PyResult<String> {
     let ctx = pydict_to_context(context)?;
     Tera::one_off(template_str, &ctx, true).map_err(|e| PyValueError::new_err(e.to_string()))
 }
@@ -123,6 +123,167 @@ fn render_once(template_str: &str, context: &Bound<'_, PyDict>) -> PyResult<Stri
 #[pymodule]
 fn pytera(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TeraEngine>()?;
-    m.add_function(wrap_pyfunction!(render_once, m)?)?;
+    m.add_function(wrap_pyfunction!(render_str, m)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::exceptions::{PyTypeError, PyValueError};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::Once;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn with_python<F, R>(f: F) -> R
+    where
+        F: for<'py> FnOnce(Python<'py>) -> R,
+    {
+        static PYTHON: Once = Once::new();
+
+        PYTHON.call_once(Python::initialize);
+        Python::attach(f)
+    }
+
+    struct TempTemplateDir {
+        path: PathBuf,
+    }
+
+    impl TempTemplateDir {
+        fn new() -> Self {
+            let unique = format!(
+                "pytera-tests-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("system time should be after unix epoch")
+                    .as_nanos()
+            );
+            let path = std::env::temp_dir().join(unique);
+
+            fs::create_dir_all(&path).expect("temp template directory should be created");
+
+            Self { path }
+        }
+
+        fn write(&self, relative_path: &str, contents: &str) {
+            let path = self.path.join(relative_path);
+
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("template parent directory should be created");
+            }
+
+            fs::write(path, contents).expect("template file should be written");
+        }
+
+        fn glob(&self) -> String {
+            format!("{}/**/*", self.path.display())
+        }
+    }
+
+    impl Drop for TempTemplateDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn module_render_str_renders_nested_context() {
+        with_python(|py| -> PyResult<()> {
+            let user = PyDict::new(py);
+            user.set_item("name", "Alex")?;
+
+            let context = PyDict::new(py);
+            context.set_item("user", user)?;
+            context.set_item("count", 3)?;
+
+            let result = render_str(
+                "Hello, {{ user.name }}! You have {{ count }} messages.",
+                &context,
+            )?;
+
+            assert_eq!(result, "Hello, Alex! You have 3 messages.");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn new_and_render_load_templates_from_disk() {
+        let templates = TempTemplateDir::new();
+        templates.write(
+            "base.html",
+            "<title>{% block title %}Default{% endblock title %}</title>{% block content %}{% endblock content %}",
+        );
+        templates.write(
+            "index.html",
+            "{% extends \"base.html\" %}{% block title %}{{ page_title }}{% endblock title %}{% block content %}{% for item in items %}[{{ item }}]{% endfor %}{% endblock content %}",
+        );
+
+        with_python(|py| -> PyResult<()> {
+            let engine = TeraEngine::new(&templates.glob())?;
+            let context = PyDict::new(py);
+            context.set_item("page_title", "Projects")?;
+            context.set_item("items", vec!["pytera", "tera"])?;
+
+            let result = engine.render("index.html", &context)?;
+
+            assert!(result.contains("<title>Projects</title>"));
+            assert!(result.contains("[pytera][tera]"));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn render_str_renders_without_disk_templates() {
+        with_python(|py| -> PyResult<()> {
+            let engine = TeraEngine {
+                tera: Tera::default(),
+            };
+            let context = PyDict::new(py);
+            context.set_item("values", vec![1, 2, 3])?;
+
+            let result = engine.render_str(
+                "{% for value in values %}{{ value }}{% if not loop.last %}, {% endif %}{% endfor %}",
+                &context,
+            )?;
+
+            assert_eq!(result, "1, 2, 3");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn render_returns_value_error_for_missing_template() {
+        with_python(|py| -> PyResult<()> {
+            let engine = TeraEngine {
+                tera: Tera::default(),
+            };
+            let context = PyDict::new(py);
+
+            let error = engine.render("missing.html", &context).unwrap_err();
+
+            assert!(error.is_instance_of::<PyValueError>(py));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn module_render_str_rejects_non_json_values() {
+        with_python(|py| -> PyResult<()> {
+            let object = py.import("builtins")?.getattr("object")?.call0()?;
+            let context = PyDict::new(py);
+            context.set_item("value", object)?;
+
+            let error = render_str("{{ value }}", &context).unwrap_err();
+
+            assert!(error.is_instance_of::<PyTypeError>(py));
+            Ok(())
+        })
+        .unwrap();
+    }
 }

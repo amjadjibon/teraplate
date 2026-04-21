@@ -1,51 +1,60 @@
 # pytera
 
-Python bindings for the [Tera](https://github.com/Keats/tera) template engine, powered by Rust and PyO3.
+Python bindings for the [Tera](https://github.com/Keats/tera) template engine, built with Rust, [PyO3](https://github.com/PyO3/pyo3), and [Maturin](https://github.com/PyO3/maturin).
 
-Tera is a blazing-fast template engine inspired by Jinja2 and Django templates. `pytera` wraps it with a clean Python API via Maturin, giving you nanosecond-level rendering with familiar `{{ variable }}` syntax.
-
----
+`pytera` exposes a small Python API over Tera's Jinja2-like template syntax: variables, filters, loops, conditionals, inheritance, and macros.
 
 ## Features
 
-- Full Tera template syntax — variables, filters, loops, conditionals, inheritance, macros
-- File-based rendering via glob patterns
-- One-off string rendering without a file
-- Built on [PyO3](https://github.com/PyO3/pyo3) + [Maturin](https://github.com/PyO3/maturin) — no FFI boilerplate
-- Accepts plain Python dicts as template context
+- Render named templates loaded from a filesystem glob
+- Render inline template strings with `pytera.render_str(...)`
+- Render inline strings on an existing engine with `engine.render_str(...)`
+- Accept plain Python dictionaries as context
+- Support nested JSON-serializable values such as lists, numbers, booleans, and `None`
+- Ship type information for Python tooling
 
----
+## Requirements
+
+- Python `>=3.8`
+- Rust toolchain for local source builds
 
 ## Installation
+
+Install from PyPI:
 
 ```bash
 pip install pytera
 ```
 
-To build from source (requires Rust):
+Install with `uv`:
 
 ```bash
-git clone https://github.com/yourname/pytera
+uv add pytera
+```
+
+Build from source:
+
+```bash
+git clone https://github.com/amjadjibon/pytera
 cd pytera
-pip install maturin
+python -m pip install maturin
 maturin develop --release
 ```
 
----
-
 ## Quickstart
 
-### One-off string rendering
+### Module-level inline render
 
 ```python
 import pytera
 
-result = pytera.render_once(
+out = pytera.render_str(
     "Hello, {{ name }}! You have {{ count }} messages.",
-    {"name": "Amjad", "count": 42}
+    {"name": "Alex", "count": 42},
 )
-print(result)
-# Hello, Amjad! You have 42 messages.
+
+print(out)
+# Hello, Alex! You have 42 messages.
 ```
 
 ### File-based rendering
@@ -53,19 +62,88 @@ print(result)
 ```python
 import pytera
 
-engine = pytera.TeraEngine("templates/**/*.html")
-html = engine.render("hello.html", {
-    "name": "Amjad",
-    "items": ["Kubernetes", "Go", "Tera"]
-})
+engine = pytera.TeraEngine("examples/templates/**/*")
+html = engine.render(
+    "index.html",
+    {
+        "page_title": "My Projects",
+        "user": {"name": "Alex"},
+        "items": [
+            {"name": "pytera", "badge": "new", "tags": ["rust", "python"]},
+            {"name": "tera", "badge": None, "tags": ["templates"]},
+        ],
+    },
+)
+
 print(html)
 ```
 
----
+### Inline render on an existing engine
+
+```python
+import pytera
+
+engine = pytera.TeraEngine("examples/templates/**/*")
+out = engine.render_str(
+    "{% for s in scores %}{{ s.name }}: {{ s.score }}{% if not loop.last %} | {% endif %}{% endfor %}",
+    {"scores": [{"name": "Alice", "score": 95}, {"name": "Bob", "score": 87}]},
+)
+
+print(out)
+# Alice: 95 | Bob: 87
+```
+
+## API
+
+### `pytera.TeraEngine(glob: str)`
+
+Loads templates from a glob pattern.
+
+```python
+engine = pytera.TeraEngine("examples/templates/**/*")
+```
+
+Raises `ValueError` if the glob is invalid or any matched template cannot be parsed.
+
+### `engine.render(template_name: str, context: dict) -> str`
+
+Renders a template that was loaded when the engine was created.
+
+```python
+html = engine.render("index.html", {"page_title": "Home"})
+```
+
+Raises `ValueError` if the template is missing or rendering fails.
+
+### `engine.render_str(template_str: str, context: dict) -> str`
+
+Renders a raw template string without reading from disk.
+
+```python
+out = engine.render_str("Hello {{ name }}", {"name": "Alex"})
+```
+
+### `pytera.render_str(template_str: str, context: dict) -> str`
+
+Renders a raw template string without creating an engine.
+
+```python
+out = pytera.render_str("{{ x }} + {{ y }} = {{ x + y }}", {"x": 1, "y": 2})
+```
+
+## Context Rules
+
+Context values are serialized from Python into JSON before being passed to Tera. In practice:
+
+- The top-level context must be a Python `dict`
+- Values should be JSON-serializable
+- Nested dicts, lists, strings, numbers, booleans, and `None` are supported
+
+If you pass non-JSON Python objects, rendering will fail.
 
 ## Template Syntax
 
-`pytera` uses Tera's full template syntax, which is nearly identical to Jinja2.
+`pytera` uses Tera syntax, which is close to Jinja2.
 
 ### Variables
 
@@ -106,7 +184,8 @@ print(html)
 
 ### Template Inheritance
 
-`base.html`:
+`base.html`
+
 ```html
 <!DOCTYPE html>
 <html>
@@ -117,7 +196,8 @@ print(html)
 </html>
 ```
 
-`page.html`:
+`page.html`
+
 ```html
 {% extends "base.html" %}
 
@@ -138,190 +218,39 @@ print(html)
 {{ self::input(name="username") }}
 ```
 
----
+## Examples
 
-## API Reference
+The repository includes runnable examples in [`examples/render.py`](./examples/render.py) and templates in [`examples/templates/`](./examples/templates/).
 
-### `pytera.TeraEngine(glob: str)`
-
-Creates a new engine instance that loads templates from a glob pattern.
-
-```python
-engine = pytera.TeraEngine("templates/**/*.html")
-```
-
-### `engine.render(template_name: str, context: dict) -> str`
-
-Renders a named template with the given context dict.
-
-```python
-html = engine.render("email/welcome.html", {"user": "Amjad"})
-```
-
-### `engine.render_str(template_str: str, context: dict) -> str`
-
-Renders a raw template string without loading from disk.
-
-```python
-out = engine.render_str("Hello {{ name }}", {"name": "Amjad"})
-```
-
-### `pytera.render_once(template_str: str, context: dict) -> str`
-
-Module-level convenience function for one-off rendering. No engine instantiation needed.
-
-```python
-out = pytera.render_once("{{ x }} + {{ y }} = {{ x + y }}", {"x": 1, "y": 2})
-```
-
----
-
-## Project Structure
-
-```
-pytera/
-├── Cargo.toml          # Rust deps: pyo3, tera, serde_json
-├── pyproject.toml      # Maturin build config
-├── src/
-│   └── lib.rs          # PyO3 bindings
-└── templates/          # Your Jinja2-compatible templates
-    └── hello.html
-```
-
-### `Cargo.toml`
-
-```toml
-[package]
-name = "pytera"
-version = "0.1.0"
-edition = "2021"
-
-[lib]
-name = "pytera"
-crate-type = ["cdylib"]
-
-[dependencies]
-pyo3 = { version = "0.22", features = ["extension-module"] }
-tera = "1"
-serde_json = "1"
-
-[profile.release]
-lto = true
-codegen-units = 1
-strip = true
-```
-
-### `pyproject.toml`
-
-```toml
-[build-system]
-requires = ["maturin>=1.7,<2.0"]
-build-backend = "maturin"
-
-[project]
-name = "pytera"
-version = "0.1.0"
-description = "Python bindings for the Tera template engine"
-requires-python = ">=3.8"
-
-[tool.maturin]
-features = ["pyo3/extension-module"]
-```
-
-### `src/lib.rs`
-
-```rust
-use pyo3::exceptions::PyValueError;
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
-use tera::{Context, Tera};
-
-#[pyclass]
-struct TeraEngine {
-    tera: Tera,
-}
-
-#[pymethods]
-impl TeraEngine {
-    #[new]
-    fn new(glob: &str) -> PyResult<Self> {
-        let tera = Tera::new(glob).map_err(|e| PyValueError::new_err(e.to_string()))?;
-        Ok(TeraEngine { tera })
-    }
-
-    fn render(&self, template_name: &str, context: &Bound<'_, PyDict>) -> PyResult<String> {
-        let ctx = pydict_to_context(context)?;
-        self.tera
-            .render(template_name, &ctx)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-
-    fn render_str(&mut self, template_str: &str, context: &Bound<'_, PyDict>) -> PyResult<String> {
-        let ctx = pydict_to_context(context)?;
-        Tera::one_off(template_str, &ctx, true)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
-    }
-}
-
-fn pydict_to_context(dict: &Bound<'_, PyDict>) -> PyResult<Context> {
-    let json_str: String = Python::with_gil(|py| {
-        let json_mod = py.import("json")?;
-        json_mod.call_method1("dumps", (dict,))?.extract::<String>()
-    })?;
-    let value: serde_json::Value =
-        serde_json::from_str(&json_str).map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Context::from_value(value).map_err(|e| PyValueError::new_err(e.to_string()))
-}
-
-#[pyfunction]
-fn render_once(template_str: &str, context: &Bound<'_, PyDict>) -> PyResult<String> {
-    let ctx = pydict_to_context(context)?;
-    Tera::one_off(template_str, &ctx, true).map_err(|e| PyValueError::new_err(e.to_string()))
-}
-
-#[pymodule]
-fn pytera(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<TeraEngine>()?;
-    m.add_function(wrap_pyfunction!(render_once, m)?)?;
-    Ok(())
-}
-```
-
----
-
-## Building & Publishing
+Run them with:
 
 ```bash
-# Development install
-maturin develop
-
-# Release build
-maturin develop --release
-
-# Build wheel
-maturin build --release
-
-# Publish to PyPI
-maturin publish
+python examples/render.py
 ```
 
----
+## Project Layout
 
-## Why pytera over Jinja2?
+```text
+pytera/
+├── Cargo.toml
+├── pyproject.toml
+├── pytera/
+│   ├── __init__.py
+│   ├── py.typed
+│   └── pytera.pyi
+├── src/
+│   └── lib.rs
+└── examples/
+    ├── render.py
+    └── templates/
+```
 
-| | pytera | Jinja2 |
-|---|---|---|
-| Runtime | Rust (nanoseconds) | Python (microseconds) |
-| Syntax | Tera (Jinja2-compatible) | Jinja2 |
-| GIL | Releases during render | Held |
-| Template inheritance | ✅ | ✅ |
-| Custom filters | Via Rust | Via Python |
-| Pure Python fallback | ❌ | ✅ |
+## Development
 
-For most web apps, Jinja2 is perfectly fast. `pytera` is the right choice when you need **maximum rendering throughput** — bulk email generation, static site generation, high-QPS API responses with templated output.
+Build and run locally:
 
----
-
-## License
-
-MIT
+```bash
+maturin develop --release
+python examples/render.py
+cargo test
+```

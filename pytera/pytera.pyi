@@ -42,7 +42,7 @@ class TeraEngine:
 
         Example::
 
-            html = engine.render("email/welcome.html", {"user": "Amjad"})
+            html = engine.render("email/welcome.html", {"user": "Alex"})
         """
         ...
 
@@ -69,11 +69,11 @@ class TeraEngine:
         ...
 
 
-def render_once(template_str: str, context: dict) -> str:
-    """Render a template string in one shot without creating an engine.
+def render_str(template_str: str, context: dict) -> str:
+    """Render a template string without creating an engine.
 
-    Convenience function for one-off renders.  There is no caching — every
-    call parses and renders the template from scratch.  For repeated rendering
+    There is no caching — every call parses and renders the template from
+    scratch.  For repeated rendering
     of the same template prefer :class:`TeraEngine`.
 
     Args:
@@ -89,9 +89,9 @@ def render_once(template_str: str, context: dict) -> str:
 
     Example::
 
-        out = render_once(
+        out = render_str(
             "Hello, {{ name }}! You have {{ count }} messages.",
-            {"name": "Amjad", "count": 42}
+            {"name": "Alex", "count": 42}
         )
     """
     ...

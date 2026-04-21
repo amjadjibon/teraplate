@@ -6,7 +6,7 @@ TEMPLATES = str(Path(__file__).parent / "templates/**/*")
 engine = pytera.TeraEngine(TEMPLATES)
 
 
-def demo_index():
+def render_index():
     html = engine.render("index.html", {
         "page_title": "My Projects",
         "user": {"name": "John"},
@@ -20,7 +20,7 @@ def demo_index():
     print(html)
 
 
-def demo_email():
+def render_email():
     txt = engine.render("email.txt", {
         "subject": "Your weekly summary",
         "app_name": "pytera",
@@ -34,16 +34,16 @@ def demo_email():
     print(txt)
 
 
-def demo_render_str():
-    out = pytera.render_once(
+def render_string():
+    out = pytera.render_str(
         "{{ items | length }} item(s): {% for i in items %}{{ i }}{% if not loop.last %}, {% endif %}{% endfor %}",
         {"items": ["Rust", "Python", "Tera"]},
     )
-    print("=== render_once ===")
+    print("=== pytera.render_str ===")
     print(out)
 
 
-def demo_render_str_engine():
+def render_string_with_engine():
     out = engine.render_str(
         "{% for s in scores %}{{ s.name }}: {{ s.score }}{% if not loop.last %} | {% endif %}{% endfor %}",
         {"scores": [{"name": "Alice", "score": 95}, {"name": "Bob", "score": 87}, {"name": "Carol", "score": 92}]},
@@ -53,7 +53,7 @@ def demo_render_str_engine():
 
 
 if __name__ == "__main__":
-    demo_index()
-    demo_email()
-    demo_render_str()
-    demo_render_str_engine()
+    render_index()
+    render_email()
+    render_string()
+    render_string_with_engine()
