@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block title %}{{ page_title }} — pytera{% endblock title %}
+
+{% block content %}
+<h1>{{ page_title }}</h1>
+
+{% if items %}
+<ul>
+  {% for item in items %}
+  <li>
+    <strong>{{ loop.index }}. {{ item.name | upper }}</strong>
+    {% if item.badge %}<span class="badge">{{ item.badge }}</span>{% endif %}
+    {% if item.tags %}
+    — {{ item.tags | join(sep=", ") }}
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+<p>Total: {{ items | length }} items</p>
+{% else %}
+<p>No items yet.</p>
+{% endif %}
+{% endblock content %}

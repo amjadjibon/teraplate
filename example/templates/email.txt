@@ -1,0 +1,21 @@
+Subject: {{ subject }}
+
+Hi {{ recipient.name }},
+
+{% if recipient.is_new %}
+Welcome to {{ app_name }}! We're glad to have you.
+{% else %}
+Thanks for coming back to {{ app_name }}.
+{% endif %}
+
+Your recent activity:
+{% for event in events %}
+  - {{ event.date }}: {{ event.description }}
+{% endfor %}
+
+{% if events | length == 0 %}
+No activity yet — get started today!
+{% endif %}
+
+Cheers,
+The {{ app_name }} Team

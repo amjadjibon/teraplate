@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>{% block title %}pytera{% endblock title %}</title>
+</head>
+<body>
+  <nav>
+    <a href="/">Home</a>
+    {% if user %}<span>Hello, {{ user.name }}!</span>{% endif %}
+  </nav>
+
+  <main>
+    {% block content %}{% endblock content %}
+  </main>
+
+  <footer>Built with pytera</footer>
+</body>
+</html>
