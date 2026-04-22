@@ -1,3 +1,18 @@
+class PyteraError(Exception): ...
+
+
+class TemplateLoadError(PyteraError): ...
+
+
+class TemplateRenderError(PyteraError): ...
+
+
+class TemplateNotFoundError(TemplateRenderError): ...
+
+
+class ContextError(PyteraError): ...
+
+
 class TeraEngine:
     """Template engine that loads templates from the filesystem.
 
@@ -9,8 +24,8 @@ class TeraEngine:
             Tera walks the pattern at construction time and loads every match.
 
     Raises:
-        ValueError: If the glob pattern is invalid or any matched file cannot
-            be parsed as a Tera template.
+        TemplateLoadError: If the glob pattern is invalid or any matched file
+            cannot be parsed as a Tera template.
 
     Example::
 
@@ -37,8 +52,8 @@ class TeraEngine:
             Rendered output as a string.
 
         Raises:
-            ValueError: If the template is not found or rendering fails
-                (undefined variable, bad filter call, etc.).
+            TemplateNotFoundError: If the template is not found.
+            TemplateRenderError: If rendering fails for another reason.
 
         Example::
 
@@ -60,11 +75,26 @@ class TeraEngine:
             Rendered output as a string.
 
         Raises:
-            ValueError: If the template cannot be parsed or rendering fails.
+            ContextError: If the context cannot be converted.
+            TemplateRenderError: If the template cannot be parsed or rendering
+                fails.
 
         Example::
 
             out = engine.render_str("{{ x }} + {{ y }} = {{ x + y }}", {"x": 1, "y": 2})
+        """
+        ...
+
+    def templates(self) -> list[str]:
+        """Return the list of currently loaded template names.
+
+        Returns:
+            ``list[str]``: List of currently loaded template names.
+
+        Example::
+
+            engine = TeraEngine("templates/**/*.html")
+            sorted(engine.templates())
         """
         ...
 
@@ -85,7 +115,9 @@ def render_str(template_str: str, context: dict) -> str:
         Rendered output as a string.
 
     Raises:
-        ValueError: If the template cannot be parsed or rendering fails.
+        ContextError: If the context cannot be converted.
+        TemplateRenderError: If the template cannot be parsed or rendering
+            fails.
 
     Example::
 

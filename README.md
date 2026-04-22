@@ -9,6 +9,7 @@ Python bindings for the [Tera](https://github.com/Keats/tera) template engine, b
 - Render named templates loaded from a filesystem glob
 - Render inline template strings with `pytera.render_str(...)`
 - Render inline strings on an existing engine with `engine.render_str(...)`
+- Inspect loaded template names with `engine.templates()`
 - Accept plain Python dictionaries as context
 - Support nested JSON-serializable values such as lists, numbers, booleans, and `None`
 - Ship type information for Python tooling
@@ -103,7 +104,7 @@ Loads templates from a glob pattern.
 engine = pytera.TeraEngine("examples/templates/**/*")
 ```
 
-Raises `ValueError` if the glob is invalid or any matched template cannot be parsed.
+Raises `TemplateLoadError` if the glob is invalid or any matched template cannot be parsed.
 
 ### `engine.render(template_name: str, context: dict) -> str`
 
@@ -113,7 +114,7 @@ Renders a template that was loaded when the engine was created.
 html = engine.render("index.html", {"page_title": "Home"})
 ```
 
-Raises `ValueError` if the template is missing or rendering fails.
+Raises `TemplateNotFoundError` if the template is missing, and `TemplateRenderError` for other rendering failures.
 
 ### `engine.render_str(template_str: str, context: dict) -> str`
 
@@ -123,6 +124,14 @@ Renders a raw template string without reading from disk.
 out = engine.render_str("Hello {{ name }}", {"name": "Alex"})
 ```
 
+### `engine.templates() -> list[str]`
+
+Returns the names of templates currently loaded in the engine.
+
+```python
+loaded = sorted(engine.templates())
+```
+
 ### `pytera.render_str(template_str: str, context: dict) -> str`
 
 Renders a raw template string without creating an engine.
@@ -130,6 +139,16 @@ Renders a raw template string without creating an engine.
 ```python
 out = pytera.render_str("{{ x }} + {{ y }} = {{ x + y }}", {"x": 1, "y": 2})
 ```
+
+## Exceptions
+
+`pytera` exports Python exception types so callers can catch specific failures:
+
+- `PyteraError`: base exception for package-specific errors
+- `TemplateLoadError`: templates could not be loaded or parsed from disk
+- `TemplateRenderError`: rendering failed
+- `TemplateNotFoundError`: a named template was not found
+- `ContextError`: the Python context could not be converted into Tera context
 
 ## Context Rules
 

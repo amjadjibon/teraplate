@@ -1,7 +1,51 @@
-use pyo3::exceptions::PyValueError;
+use pyo3::create_exception;
+use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use tera::{Context, Tera};
+use tera::{Context, Error as TeraError, ErrorKind, Tera};
+
+create_exception!(pytera, PyteraError, PyException, "Base exception for pytera.");
+create_exception!(
+    pytera,
+    TemplateLoadError,
+    PyteraError,
+    "Raised when templates cannot be loaded or parsed from disk."
+);
+create_exception!(
+    pytera,
+    TemplateRenderError,
+    PyteraError,
+    "Raised when template rendering fails."
+);
+create_exception!(
+    pytera,
+    TemplateNotFoundError,
+    TemplateRenderError,
+    "Raised when a named template cannot be found."
+);
+create_exception!(
+    pytera,
+    ContextError,
+    PyteraError,
+    "Raised when Python context data cannot be converted into Tera context."
+);
+
+fn map_tera_load_error(error: TeraError) -> PyErr {
+    TemplateLoadError::new_err(error.to_string())
+}
+
+fn map_tera_render_error(error: TeraError) -> PyErr {
+    match &error.kind {
+        ErrorKind::TemplateNotFound(_) | ErrorKind::MissingParent { .. } => {
+            TemplateNotFoundError::new_err(error.to_string())
+        }
+        _ => TemplateRenderError::new_err(error.to_string()),
+    }
+}
+
+fn map_context_error(message: impl ToString) -> PyErr {
+    ContextError::new_err(message.to_string())
+}
 
 /// Template engine that loads templates from the filesystem.
 ///
@@ -12,8 +56,8 @@ use tera::{Context, Tera};
 ///     glob: Glob pattern for template files, e.g. ``"templates/**/*.html"``.
 ///
 /// Raises:
-///     ValueError: If the glob pattern is invalid or any matched file cannot
-///         be parsed as a Tera template.
+///     TemplateLoadError: If the glob pattern is invalid or any matched file
+///         cannot be parsed as a Tera template.
 ///
 /// Example::
 ///
@@ -28,7 +72,7 @@ struct TeraEngine {
 impl TeraEngine {
     #[new]
     fn new(glob: &str) -> PyResult<Self> {
-        let tera = Tera::new(glob).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let tera = Tera::new(glob).map_err(map_tera_load_error)?;
         Ok(TeraEngine { tera })
     }
 
@@ -48,7 +92,8 @@ impl TeraEngine {
     ///     Rendered output as a string.
     ///
     /// Raises:
-    ///     ValueError: If the template is not found or rendering fails.
+    ///     TemplateNotFoundError: If the template is not found.
+    ///     TemplateRenderError: If rendering fails for another reason.
     ///
     /// Example::
     ///
@@ -57,7 +102,7 @@ impl TeraEngine {
         let ctx = pydict_to_context(context)?;
         self.tera
             .render(template_name, &ctx)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(map_tera_render_error)
     }
 
     /// Render a raw template string without loading from disk.
@@ -73,7 +118,9 @@ impl TeraEngine {
     ///     Rendered output as a string.
     ///
     /// Raises:
-    ///     ValueError: If the template cannot be parsed or rendering fails.
+    ///     ContextError: If the context cannot be converted.
+    ///     TemplateRenderError: If the template cannot be parsed or rendering
+    ///         fails.
     ///
     /// Example::
     ///
@@ -81,16 +128,38 @@ impl TeraEngine {
     fn render_str(&self, template_str: &str, context: &Bound<'_, PyDict>) -> PyResult<String> {
         let ctx = pydict_to_context(context)?;
         Tera::one_off(template_str, &ctx, true)
-            .map_err(|e| PyValueError::new_err(e.to_string()))
+            .map_err(map_tera_render_error)
+    }
+
+    /// Return the list of currently loaded template names.
+    ///
+    /// Returns:
+    ///     list[str]: List of loaded template names.
+    ///
+    /// Example::
+    ///
+    ///     engine = TeraEngine("templates/**/*.html")
+    ///     sorted(engine.templates())
+    fn templates(&self) -> Vec<String> {
+        self.tera
+            .get_template_names()
+            .map(str::to_owned)
+            .collect()
     }
 }
 
 fn pydict_to_context(dict: &Bound<'_, PyDict>) -> PyResult<Context> {
     let py = dict.py();
-    let json_str: String = py.import("json")?.call_method1("dumps", (dict,))?.extract()?;
+    let json_str: String = py
+        .import("json")
+        .map_err(|e| map_context_error(e))?
+        .call_method1("dumps", (dict,))
+        .map_err(|e| map_context_error(e))?
+        .extract()
+        .map_err(|e| map_context_error(e))?;
     let value: serde_json::Value =
-        serde_json::from_str(&json_str).map_err(|e| PyValueError::new_err(e.to_string()))?;
-    Context::from_value(value).map_err(|e| PyValueError::new_err(e.to_string()))
+        serde_json::from_str(&json_str).map_err(map_context_error)?;
+    Context::from_value(value).map_err(map_context_error)
 }
 
 /// Render a template string without creating an engine.
@@ -108,7 +177,9 @@ fn pydict_to_context(dict: &Bound<'_, PyDict>) -> PyResult<Context> {
 ///     Rendered output as a string.
 ///
 /// Raises:
-///     ValueError: If the template cannot be parsed or rendering fails.
+///     ContextError: If the context cannot be converted.
+///     TemplateRenderError: If the template cannot be parsed or rendering
+///         fails.
 ///
 /// Example::
 ///
@@ -117,20 +188,27 @@ fn pydict_to_context(dict: &Bound<'_, PyDict>) -> PyResult<Context> {
 #[pyfunction]
 fn render_str(template_str: &str, context: &Bound<'_, PyDict>) -> PyResult<String> {
     let ctx = pydict_to_context(context)?;
-    Tera::one_off(template_str, &ctx, true).map_err(|e| PyValueError::new_err(e.to_string()))
+    Tera::one_off(template_str, &ctx, true).map_err(map_tera_render_error)
 }
 
 #[pymodule]
 fn pytera(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    let py = m.py();
+
     m.add_class::<TeraEngine>()?;
     m.add_function(wrap_pyfunction!(render_str, m)?)?;
+    m.add("PyteraError", py.get_type::<PyteraError>())?;
+    m.add("TemplateLoadError", py.get_type::<TemplateLoadError>())?;
+    m.add("TemplateRenderError", py.get_type::<TemplateRenderError>())?;
+    m.add("TemplateNotFoundError", py.get_type::<TemplateNotFoundError>())?;
+    m.add("ContextError", py.get_type::<ContextError>())?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyo3::exceptions::{PyTypeError, PyValueError};
+    use pyo3::types::IntoPyDict;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Once;
@@ -144,6 +222,18 @@ mod tests {
 
         PYTHON.call_once(Python::initialize);
         Python::attach(f)
+    }
+
+    fn add_error_types<'py>(py: Python<'py>) -> Bound<'py, PyDict> {
+        [
+            ("PyteraError", py.get_type::<PyteraError>()),
+            ("TemplateLoadError", py.get_type::<TemplateLoadError>()),
+            ("TemplateRenderError", py.get_type::<TemplateRenderError>()),
+            ("TemplateNotFoundError", py.get_type::<TemplateNotFoundError>()),
+            ("ContextError", py.get_type::<ContextError>()),
+        ]
+        .into_py_dict(py)
+        .expect("error types dict should be created")
     }
 
     struct TempTemplateDir {
@@ -210,6 +300,38 @@ mod tests {
     }
 
     #[test]
+    fn exported_error_types_have_expected_hierarchy() {
+        with_python(|py| -> PyResult<()> {
+            let ctx = add_error_types(py);
+
+            py.run(
+                c"assert issubclass(TemplateLoadError, PyteraError)\nassert issubclass(TemplateRenderError, PyteraError)\nassert issubclass(TemplateNotFoundError, TemplateRenderError)\nassert issubclass(ContextError, PyteraError)",
+                None,
+                Some(&ctx),
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn new_returns_template_load_error_for_invalid_templates() {
+        let templates = TempTemplateDir::new();
+        templates.write("broken.html", "{% if user %}");
+
+        with_python(|py| -> PyResult<()> {
+            let error = match TeraEngine::new(&templates.glob()) {
+                Ok(_) => panic!("expected invalid template to fail loading"),
+                Err(error) => error,
+            };
+
+            assert!(error.is_instance_of::<TemplateLoadError>(py));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
     fn new_and_render_load_templates_from_disk() {
         let templates = TempTemplateDir::new();
         templates.write(
@@ -237,6 +359,23 @@ mod tests {
     }
 
     #[test]
+    fn templates_returns_loaded_template_names() {
+        let templates = TempTemplateDir::new();
+        templates.write("base.html", "<title>{% block title %}Default{% endblock title %}</title>");
+        templates.write("pages/index.html", "{% extends \"base.html\" %}");
+
+        with_python(|_py| -> PyResult<()> {
+            let engine = TeraEngine::new(&templates.glob())?;
+            let mut loaded = engine.templates();
+            loaded.sort();
+
+            assert_eq!(loaded, vec!["base.html".to_string(), "pages/index.html".to_string()]);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
     fn render_str_renders_without_disk_templates() {
         with_python(|py| -> PyResult<()> {
             let engine = TeraEngine {
@@ -257,7 +396,7 @@ mod tests {
     }
 
     #[test]
-    fn render_returns_value_error_for_missing_template() {
+    fn render_returns_template_not_found_error_for_missing_template() {
         with_python(|py| -> PyResult<()> {
             let engine = TeraEngine {
                 tera: Tera::default(),
@@ -266,14 +405,14 @@ mod tests {
 
             let error = engine.render("missing.html", &context).unwrap_err();
 
-            assert!(error.is_instance_of::<PyValueError>(py));
+            assert!(error.is_instance_of::<TemplateNotFoundError>(py));
             Ok(())
         })
         .unwrap();
     }
 
     #[test]
-    fn module_render_str_rejects_non_json_values() {
+    fn module_render_str_rejects_non_json_values_with_context_error() {
         with_python(|py| -> PyResult<()> {
             let object = py.import("builtins")?.getattr("object")?.call0()?;
             let context = PyDict::new(py);
@@ -281,7 +420,22 @@ mod tests {
 
             let error = render_str("{{ value }}", &context).unwrap_err();
 
-            assert!(error.is_instance_of::<PyTypeError>(py));
+            assert!(error.is_instance_of::<ContextError>(py));
+            assert!(error.is_instance_of::<PyteraError>(py));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn render_str_returns_template_render_error_for_invalid_template_source() {
+        with_python(|py| -> PyResult<()> {
+            let context = PyDict::new(py);
+
+            let error = render_str("{% if user %}", &context).unwrap_err();
+
+            assert!(error.is_instance_of::<TemplateRenderError>(py));
+            assert!(error.is_instance_of::<PyteraError>(py));
             Ok(())
         })
         .unwrap();

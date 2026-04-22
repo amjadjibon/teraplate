@@ -20,5 +20,20 @@ Quick start::
 """
 
 from .pytera import TeraEngine, render_str
+from .pytera import (
+    ContextError,
+    PyteraError,
+    TemplateLoadError,
+    TemplateNotFoundError,
+    TemplateRenderError,
+)
 
-__all__ = ["TeraEngine", "render_str"]
+__all__ = [
+    "ContextError",
+    "PyteraError",
+    "TemplateLoadError",
+    "TemplateNotFoundError",
+    "TemplateRenderError",
+    "TeraEngine",
+    "render_str",
+]
