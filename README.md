@@ -1,5 +1,7 @@
 # teraplate
 
+> **Experimental — for educational purposes only. Not production-ready or tested.**
+
 Python bindings for the [Tera](https://github.com/Keats/tera) template engine, built with Rust, [PyO3](https://github.com/PyO3/pyo3), and [Maturin](https://github.com/PyO3/maturin).
 
 `teraplate` exposes a small Python API over Tera's Jinja2-like template syntax: variables, filters, loops, conditionals, inheritance, and macros.
