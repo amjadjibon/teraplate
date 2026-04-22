@@ -518,15 +518,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pytera"
-version = "0.1.0"
-dependencies = [
- "pyo3",
- "serde_json",
- "tera",
-]
-
-[[package]]
 name = "quote"
 version = "1.0.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -721,6 +712,15 @@ dependencies = [
  "serde_json",
  "slug",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "tera-py"
+version = "0.1.0"
+dependencies = [
+ "pyo3",
+ "serde_json",
+ "tera",
 ]
 
 [[package]]

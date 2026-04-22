@@ -4,29 +4,29 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use tera::{Context, Error as TeraError, ErrorKind, Tera};
 
-create_exception!(pytera, PyteraError, PyException, "Base exception for pytera.");
+create_exception!(tera_py, TeraPyError, PyException, "Base exception for tera_py.");
 create_exception!(
-    pytera,
+    tera_py,
     TemplateLoadError,
-    PyteraError,
+    TeraPyError,
     "Raised when templates cannot be loaded or parsed from disk."
 );
 create_exception!(
-    pytera,
+    tera_py,
     TemplateRenderError,
-    PyteraError,
+    TeraPyError,
     "Raised when template rendering fails."
 );
 create_exception!(
-    pytera,
+    tera_py,
     TemplateNotFoundError,
     TemplateRenderError,
     "Raised when a named template cannot be found."
 );
 create_exception!(
-    pytera,
+    tera_py,
     ContextError,
-    PyteraError,
+    TeraPyError,
     "Raised when Python context data cannot be converted into Tera context."
 );
 
@@ -192,12 +192,12 @@ fn render_str(template_str: &str, context: &Bound<'_, PyDict>) -> PyResult<Strin
 }
 
 #[pymodule]
-fn pytera(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn tera_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
 
     m.add_class::<TeraEngine>()?;
     m.add_function(wrap_pyfunction!(render_str, m)?)?;
-    m.add("PyteraError", py.get_type::<PyteraError>())?;
+    m.add("TeraPyError", py.get_type::<TeraPyError>())?;
     m.add("TemplateLoadError", py.get_type::<TemplateLoadError>())?;
     m.add("TemplateRenderError", py.get_type::<TemplateRenderError>())?;
     m.add("TemplateNotFoundError", py.get_type::<TemplateNotFoundError>())?;
@@ -226,7 +226,7 @@ mod tests {
 
     fn add_error_types<'py>(py: Python<'py>) -> Bound<'py, PyDict> {
         [
-            ("PyteraError", py.get_type::<PyteraError>()),
+            ("TeraPyError", py.get_type::<TeraPyError>()),
             ("TemplateLoadError", py.get_type::<TemplateLoadError>()),
             ("TemplateRenderError", py.get_type::<TemplateRenderError>()),
             ("TemplateNotFoundError", py.get_type::<TemplateNotFoundError>()),
@@ -305,7 +305,7 @@ mod tests {
             let ctx = add_error_types(py);
 
             py.run(
-                c"assert issubclass(TemplateLoadError, PyteraError)\nassert issubclass(TemplateRenderError, PyteraError)\nassert issubclass(TemplateNotFoundError, TemplateRenderError)\nassert issubclass(ContextError, PyteraError)",
+                c"assert issubclass(TemplateLoadError, TeraPyError)\nassert issubclass(TemplateRenderError, TeraPyError)\nassert issubclass(TemplateNotFoundError, TemplateRenderError)\nassert issubclass(ContextError, TeraPyError)",
                 None,
                 Some(&ctx),
             )?;
@@ -421,7 +421,7 @@ mod tests {
             let error = render_str("{{ value }}", &context).unwrap_err();
 
             assert!(error.is_instance_of::<ContextError>(py));
-            assert!(error.is_instance_of::<PyteraError>(py));
+            assert!(error.is_instance_of::<TeraPyError>(py));
             Ok(())
         })
         .unwrap();
@@ -435,7 +435,7 @@ mod tests {
             let error = render_str("{% if user %}", &context).unwrap_err();
 
             assert!(error.is_instance_of::<TemplateRenderError>(py));
-            assert!(error.is_instance_of::<PyteraError>(py));
+            assert!(error.is_instance_of::<TeraPyError>(py));
             Ok(())
         })
         .unwrap();

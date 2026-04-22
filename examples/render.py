@@ -1,9 +1,9 @@
-import pytera
+import tera_py
 from pathlib import Path
 
 TEMPLATES = str(Path(__file__).parent / "templates/**/*")
 
-engine = pytera.TeraEngine(TEMPLATES)
+engine = tera_py.TeraEngine(TEMPLATES)
 
 
 def render_index():
@@ -11,7 +11,7 @@ def render_index():
         "page_title": "My Projects",
         "user": {"name": "John"},
         "items": [
-            {"name": "pytera",  "badge": "new",  "tags": ["rust", "python"]},
+            {"name": "tera_py",  "badge": "new",  "tags": ["rust", "python"]},
             {"name": "memsh",   "badge": None,   "tags": ["go", "shell"]},
             {"name": "tera",    "badge": None,   "tags": ["rust", "templates"]},
         ],
@@ -23,7 +23,7 @@ def render_index():
 def render_email():
     txt = engine.render("email.txt", {
         "subject": "Your weekly summary",
-        "app_name": "pytera",
+        "app_name": "tera_py",
         "recipient": {"name": "John", "is_new": False},
         "events": [
             {"date": "2026-04-20", "description": "Published v0.1.0"},
@@ -35,11 +35,11 @@ def render_email():
 
 
 def render_string():
-    out = pytera.render_str(
+    out = tera_py.render_str(
         "{{ items | length }} item(s): {% for i in items %}{{ i }}{% if not loop.last %}, {% endif %}{% endfor %}",
         {"items": ["Rust", "Python", "Tera"]},
     )
-    print("=== pytera.render_str ===")
+    print("=== tera_py.render_str ===")
     print(out)
 
 
