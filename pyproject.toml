@@ -5,7 +5,8 @@ build-backend = "maturin"
 [project]
 name = "teraplate"
 description = "A fast Tera template engine Python binding written in Rust"
-requires-python = ">=3.8"
+readme = "README.md"
+requires-python = ">=3.12"
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",

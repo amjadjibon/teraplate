@@ -16,7 +16,7 @@ Python bindings for the [Tera](https://github.com/Keats/tera) template engine, b
 
 ## Requirements
 
-- Python `>=3.8`
+- Python `>=3.12`
 - Rust toolchain for local source builds
 
 ## Installation
@@ -36,8 +36,8 @@ uv add teraplate
 Build from source:
 
 ```bash
-git clone https://github.com/amjadjibon/tera-py
-cd tera-py
+git clone https://github.com/amjadjibon/teraplate
+cd teraplate
 uv run maturin develop --release
 ```
 
@@ -249,7 +249,7 @@ python examples/render.py
 ## Project Layout
 
 ```text
-tera-py/
+teraplate/
 ├── Cargo.toml
 ├── pyproject.toml
 ├── teraplate/
