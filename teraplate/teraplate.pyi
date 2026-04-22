@@ -46,7 +46,8 @@ class TeraEngine:
                 e.g. ``"pages/index.html"``.
             context: Variable bindings passed to the template.  Any
                 JSON-serializable Python value is accepted (dicts, lists,
-                strings, numbers, booleans, ``None``).
+                tuples, strings, numbers, booleans, ``None``).  Dict keys may
+                be strings, integers, floats, booleans, or ``None``.
 
         Returns:
             Rendered output as a string.
@@ -64,8 +65,9 @@ class TeraEngine:
     def render_str(self, template_str: str, context: dict) -> str:
         """Render a raw template string without loading from disk.
 
-        Useful for dynamic or user-supplied templates.  The rendered result
-        is not cached — use :meth:`render` for hot paths.
+        Useful for dynamic or user-supplied templates.  Compiled templates are
+        cached inside the engine in a bounded LRU cache, so repeated calls with
+        the same template skip recompilation without unbounded memory growth.
 
         Args:
             template_str: A Tera template string, e.g. ``"Hello, {{ name }}!"``.
@@ -109,7 +111,8 @@ def render_str(template_str: str, context: dict) -> str:
     Args:
         template_str: A Tera template string, e.g. ``"Hello, {{ name }}!"``.
         context: Variable bindings passed to the template.  Any
-            JSON-serializable Python value is accepted.
+            JSON-serializable Python value is accepted. Dict keys may be
+            strings, integers, floats, booleans, or ``None``.
 
     Returns:
         Rendered output as a string.

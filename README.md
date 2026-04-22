@@ -10,10 +10,10 @@ Python bindings for the [Tera](https://github.com/Keats/tera) template engine, b
 
 - Render named templates loaded from a filesystem glob
 - Render inline template strings with `teraplate.render_str(...)`
-- Render inline strings on an existing engine with `engine.render_str(...)`
+- Render inline strings on an existing engine with bounded template caching via `engine.render_str(...)`
 - Inspect loaded template names with `engine.templates()`
 - Accept plain Python dictionaries as context
-- Support nested JSON-serializable values such as lists, numbers, booleans, and `None`
+- Support nested JSON-serializable values such as lists, tuples, numbers, booleans, and `None`
 - Ship type information for Python tooling
 
 ## Requirements
@@ -119,7 +119,9 @@ Raises `TemplateNotFoundError` if the template is missing, and `TemplateRenderEr
 
 ### `engine.render_str(template_str: str, context: dict) -> str`
 
-Renders a raw template string without reading from disk.
+Renders a raw template string without reading from disk. Compiled inline
+templates are kept in a bounded engine-local LRU cache so repeated calls with
+the same template skip recompilation.
 
 ```python
 out = engine.render_str("Hello {{ name }}", {"name": "Alex"})
@@ -153,11 +155,13 @@ out = teraplate.render_str("{{ x }} + {{ y }} = {{ x + y }}", {"x": 1, "y": 2})
 
 ## Context Rules
 
-Context values are serialized from Python into JSON before being passed to Tera. In practice:
+Context values are converted directly from Python objects into JSON-compatible
+Rust values before being passed to Tera. In practice:
 
 - The top-level context must be a Python `dict`
 - Values should be JSON-serializable
-- Nested dicts, lists, strings, numbers, booleans, and `None` are supported
+- Nested dicts, lists, tuples, strings, numbers, booleans, and `None` are supported
+- Dict keys may be strings, integers, floats, booleans, or `None`
 
 If you pass non-JSON Python objects, rendering will fail.
 

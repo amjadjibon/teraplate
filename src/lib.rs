@@ -1,11 +1,13 @@
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::sync::{Arc, RwLock};
+use pyo3::types::{PyDict, PyList, PyTuple};
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex, RwLock};
 use tera::{Context, Error as TeraError, ErrorKind, Tera};
+
+const INLINE_TEMPLATE_NAME: &str = "__inline__";
+const INLINE_TEMPLATE_CACHE_CAPACITY: usize = 128;
 
 create_exception!(
     teraplate,
@@ -63,14 +65,92 @@ fn map_lock_error<T>(e: std::sync::PoisonError<T>) -> TeraError {
     TeraError::msg(format!("engine lock poisoned: {}", e))
 }
 
-fn inline_template_key(template_str: &str) -> String {
-    let mut hasher = DefaultHasher::new();
-    template_str.hash(&mut hasher);
-    format!("__inline__{:016x}", hasher.finish())
+struct InlineTemplateCache {
+    entries: HashMap<String, Arc<Tera>>,
+    usage_order: VecDeque<String>,
+    capacity: usize,
+}
+
+impl InlineTemplateCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            usage_order: VecDeque::new(),
+            capacity,
+        }
+    }
+
+    fn get_or_insert(&mut self, template_str: &str) -> Result<Arc<Tera>, TeraError> {
+        if let Some(tera) = self.entries.get(template_str).cloned() {
+            self.mark_used(template_str);
+            return Ok(tera);
+        }
+
+        let mut tera = Tera::default();
+        tera.add_raw_template(INLINE_TEMPLATE_NAME, template_str)?;
+        let tera = Arc::new(tera);
+
+        if self.capacity == 0 {
+            return Ok(tera);
+        }
+
+        if self.entries.len() >= self.capacity {
+            if let Some(oldest) = self.usage_order.pop_front() {
+                self.entries.remove(&oldest);
+            }
+        }
+
+        let cache_key = template_str.to_owned();
+        self.usage_order.push_back(cache_key.clone());
+        self.entries.insert(cache_key, Arc::clone(&tera));
+
+        Ok(tera)
+    }
+
+    fn mark_used(&mut self, template_str: &str) {
+        if let Some(position) = self
+            .usage_order
+            .iter()
+            .position(|cached| cached == template_str)
+        {
+            self.usage_order.remove(position);
+        }
+        self.usage_order.push_back(template_str.to_owned());
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 // Direct PyO3 object walk — avoids the json.dumps roundtrip.
 // bool must be checked before i64 since Python bools are ints.
+fn pyobj_to_key(obj: &Bound<'_, PyAny>) -> PyResult<String> {
+    if let Ok(s) = obj.extract::<String>() {
+        Ok(s)
+    } else if obj.is_none() {
+        Ok("null".to_owned())
+    } else if let Ok(b) = obj.extract::<bool>() {
+        Ok(if b { "true" } else { "false" }.to_owned())
+    } else if let Ok(i) = obj.extract::<i64>() {
+        Ok(i.to_string())
+    } else if let Ok(u) = obj.extract::<u64>() {
+        Ok(u.to_string())
+    } else if let Ok(f) = obj.extract::<f64>() {
+        if f.is_finite() {
+            serde_json::to_string(&f).map_err(map_context_error)
+        } else {
+            Err(map_context_error("non-finite float"))
+        }
+    } else {
+        Err(map_context_error(format!(
+            "unsupported dict key type: {}",
+            obj.get_type().name()?
+        )))
+    }
+}
+
 fn pyobj_to_value(obj: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
     if obj.is_none() {
         Ok(serde_json::Value::Null)
@@ -78,6 +158,8 @@ fn pyobj_to_value(obj: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
         Ok(serde_json::Value::Bool(b))
     } else if let Ok(i) = obj.extract::<i64>() {
         Ok(serde_json::Value::Number(i.into()))
+    } else if let Ok(u) = obj.extract::<u64>() {
+        Ok(serde_json::Value::Number(u.into()))
     } else if let Ok(f) = obj.extract::<f64>() {
         Ok(serde_json::Value::Number(
             serde_json::Number::from_f64(f).ok_or_else(|| map_context_error("non-finite float"))?,
@@ -90,10 +172,16 @@ fn pyobj_to_value(obj: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
             .map(|v| pyobj_to_value(&v))
             .collect::<PyResult<Vec<_>>>()?;
         Ok(serde_json::Value::Array(arr))
+    } else if let Ok(tuple) = obj.cast::<PyTuple>() {
+        let arr = tuple
+            .iter()
+            .map(|v| pyobj_to_value(&v))
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok(serde_json::Value::Array(arr))
     } else if let Ok(dict) = obj.cast::<PyDict>() {
         let mut map = serde_json::Map::new();
         for (k, v) in dict.iter() {
-            map.insert(k.extract::<String>()?, pyobj_to_value(&v)?);
+            map.insert(pyobj_to_key(&k)?, pyobj_to_value(&v)?);
         }
         Ok(serde_json::Value::Object(map))
     } else {
@@ -129,6 +217,7 @@ fn pydict_to_context(dict: &Bound<'_, PyDict>) -> PyResult<Context> {
 #[pyclass]
 struct TeraEngine {
     tera: Arc<RwLock<Tera>>,
+    inline_templates: Arc<Mutex<InlineTemplateCache>>,
 }
 
 #[pymethods]
@@ -138,6 +227,9 @@ impl TeraEngine {
         let tera = Tera::new(glob).map_err(map_tera_load_error)?;
         Ok(TeraEngine {
             tera: Arc::new(RwLock::new(tera)),
+            inline_templates: Arc::new(Mutex::new(InlineTemplateCache::new(
+                INLINE_TEMPLATE_CACHE_CAPACITY,
+            ))),
         })
     }
 
@@ -150,7 +242,8 @@ impl TeraEngine {
     ///         e.g. ``"pages/index.html"``.
     ///     context: Variable bindings passed to the template. Any
     ///         JSON-serializable Python value is accepted (dicts, lists,
-    ///         strings, numbers, booleans, None).
+    ///         tuples, strings, numbers, booleans, None). Dict keys may be
+    ///         strings, integers, floats, booleans, or None.
     ///
     /// Returns:
     ///     Rendered output as a string.
@@ -182,8 +275,9 @@ impl TeraEngine {
 
     /// Render a raw template string without loading from disk.
     ///
-    /// Compiled templates are cached inside the engine by their source string,
-    /// so repeated calls with the same template skip recompilation.
+    /// Compiled templates are cached inside the engine in a bounded LRU cache,
+    /// so repeated calls with the same template skip recompilation without
+    /// unbounded memory growth.
     /// The GIL is released during rendering.
     ///
     /// Args:
@@ -208,23 +302,16 @@ impl TeraEngine {
         context: &Bound<'_, PyDict>,
     ) -> PyResult<String> {
         let ctx = pydict_to_context(context)?;
-        let tera = Arc::clone(&self.tera);
+        let inline_templates = Arc::clone(&self.inline_templates);
         let template_str = template_str.to_owned();
-        let key = inline_template_key(&template_str);
 
         py.detach(move || {
-            let needs_insert = tera
-                .read()
+            let tera = inline_templates
+                .lock()
                 .map_err(map_lock_error)?
-                .get_template(&key)
-                .is_err();
-            if needs_insert {
-                tera.write()
-                    .map_err(map_lock_error)?
-                    .add_raw_template(&key, &template_str)?;
-            }
+                .get_or_insert(&template_str)?;
 
-            tera.read().map_err(map_lock_error)?.render(&key, &ctx)
+            tera.render(INLINE_TEMPLATE_NAME, &ctx)
         })
         .map_err(map_tera_render_error)
     }
@@ -258,7 +345,8 @@ impl TeraEngine {
 /// Args:
 ///     template_str: A Tera template string, e.g. ``"Hello, {{ name }}!"``.
 ///     context: Variable bindings passed to the template. Any
-///         JSON-serializable Python value is accepted.
+///         JSON-serializable Python value is accepted. Dict keys may be
+///         strings, integers, floats, booleans, or None.
 ///
 /// Returns:
 ///     Rendered output as a string.
@@ -302,6 +390,7 @@ fn teraplate(m: &Bound<'_, PyModule>) -> PyResult<()> {
 mod tests {
     use super::*;
     use pyo3::types::IntoPyDict;
+    use serde_json::json;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Once;
@@ -483,6 +572,9 @@ mod tests {
         with_python(|py| -> PyResult<()> {
             let engine = TeraEngine {
                 tera: Arc::new(RwLock::new(Tera::default())),
+                inline_templates: Arc::new(Mutex::new(InlineTemplateCache::new(
+                    INLINE_TEMPLATE_CACHE_CAPACITY,
+                ))),
             };
             let context = PyDict::new(py);
             context.set_item("values", vec![1, 2, 3])?;
@@ -504,6 +596,9 @@ mod tests {
         with_python(|py| -> PyResult<()> {
             let engine = TeraEngine {
                 tera: Arc::new(RwLock::new(Tera::default())),
+                inline_templates: Arc::new(Mutex::new(InlineTemplateCache::new(
+                    INLINE_TEMPLATE_CACHE_CAPACITY,
+                ))),
             };
             let context = PyDict::new(py);
 
@@ -550,6 +645,9 @@ mod tests {
         with_python(|py| -> PyResult<()> {
             let engine = TeraEngine {
                 tera: Arc::new(RwLock::new(Tera::default())),
+                inline_templates: Arc::new(Mutex::new(InlineTemplateCache::new(
+                    INLINE_TEMPLATE_CACHE_CAPACITY,
+                ))),
             };
             let context = PyDict::new(py);
             context.set_item("name", "Alex")?;
@@ -560,9 +658,95 @@ mod tests {
 
             assert_eq!(first, "Hello, Alex!");
             assert_eq!(second, "Hello, Alex!");
+            assert_eq!(
+                engine
+                    .inline_templates
+                    .lock()
+                    .expect("inline cache lock should not be poisoned")
+                    .len(),
+                1
+            );
 
             // inline templates should not appear in templates()
             assert!(engine.templates()?.is_empty());
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn pydict_to_context_supports_tuples_and_scalar_dict_keys() {
+        with_python(|py| -> PyResult<()> {
+            let mapping = PyDict::new(py);
+            mapping.set_item(2, "two")?;
+            mapping.set_item(1.0, "one-point-zero")?;
+            mapping.set_item(false, "false-value")?;
+            mapping.set_item(py.None(), "null-value")?;
+
+            let context = PyDict::new(py);
+            context.set_item("coords", (1, 2, 3))?;
+            context.set_item("mapping", mapping)?;
+
+            let ctx = pydict_to_context(&context)?;
+
+            assert_eq!(
+                ctx.into_json(),
+                json!({
+                    "coords": [1, 2, 3],
+                    "mapping": {
+                        "2": "two",
+                        "1.0": "one-point-zero",
+                        "false": "false-value",
+                        "null": "null-value"
+                    }
+                })
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn pydict_to_context_rejects_unsupported_dict_key_types() {
+        with_python(|py| -> PyResult<()> {
+            let object = py.import("builtins")?.getattr("object")?.call0()?;
+            let mapping = PyDict::new(py);
+            mapping.set_item(object, "value")?;
+
+            let context = PyDict::new(py);
+            context.set_item("mapping", mapping)?;
+
+            let error = pydict_to_context(&context).unwrap_err();
+
+            assert!(error.is_instance_of::<ContextError>(py));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn render_str_uses_bounded_lru_cache() {
+        with_python(|py| -> PyResult<()> {
+            let engine = TeraEngine {
+                tera: Arc::new(RwLock::new(Tera::default())),
+                inline_templates: Arc::new(Mutex::new(InlineTemplateCache::new(2))),
+            };
+            let context = PyDict::new(py);
+            context.set_item("name", "Alex")?;
+
+            assert_eq!(engine.render_str(py, "A {{ name }}", &context)?, "A Alex");
+            assert_eq!(engine.render_str(py, "B {{ name }}", &context)?, "B Alex");
+            assert_eq!(engine.render_str(py, "A {{ name }}", &context)?, "A Alex");
+            assert_eq!(engine.render_str(py, "C {{ name }}", &context)?, "C Alex");
+
+            let cache = engine
+                .inline_templates
+                .lock()
+                .expect("inline cache lock should not be poisoned");
+            assert_eq!(cache.len(), 2);
+            assert!(cache.entries.contains_key("A {{ name }}"));
+            assert!(cache.entries.contains_key("C {{ name }}"));
+            assert!(!cache.entries.contains_key("B {{ name }}"));
             Ok(())
         })
         .unwrap();
