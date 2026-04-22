@@ -1,10 +1,18 @@
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyList};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::{Arc, RwLock};
 use tera::{Context, Error as TeraError, ErrorKind, Tera};
 
-create_exception!(teraplate, TeraplateError, PyException, "Base exception for teraplate.");
+create_exception!(
+    teraplate,
+    TeraplateError,
+    PyException,
+    "Base exception for teraplate."
+);
 create_exception!(
     teraplate,
     TemplateLoadError,
@@ -47,10 +55,65 @@ fn map_context_error(message: impl ToString) -> PyErr {
     ContextError::new_err(message.to_string())
 }
 
+fn map_lock_py_error<T>(e: std::sync::PoisonError<T>) -> PyErr {
+    TemplateRenderError::new_err(format!("engine lock poisoned: {}", e))
+}
+
+fn map_lock_error<T>(e: std::sync::PoisonError<T>) -> TeraError {
+    TeraError::msg(format!("engine lock poisoned: {}", e))
+}
+
+fn inline_template_key(template_str: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    template_str.hash(&mut hasher);
+    format!("__inline__{:016x}", hasher.finish())
+}
+
+// Direct PyO3 object walk — avoids the json.dumps roundtrip.
+// bool must be checked before i64 since Python bools are ints.
+fn pyobj_to_value(obj: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+    if obj.is_none() {
+        Ok(serde_json::Value::Null)
+    } else if let Ok(b) = obj.extract::<bool>() {
+        Ok(serde_json::Value::Bool(b))
+    } else if let Ok(i) = obj.extract::<i64>() {
+        Ok(serde_json::Value::Number(i.into()))
+    } else if let Ok(f) = obj.extract::<f64>() {
+        Ok(serde_json::Value::Number(
+            serde_json::Number::from_f64(f).ok_or_else(|| map_context_error("non-finite float"))?,
+        ))
+    } else if let Ok(s) = obj.extract::<String>() {
+        Ok(serde_json::Value::String(s))
+    } else if let Ok(list) = obj.cast::<PyList>() {
+        let arr = list
+            .iter()
+            .map(|v| pyobj_to_value(&v))
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok(serde_json::Value::Array(arr))
+    } else if let Ok(dict) = obj.cast::<PyDict>() {
+        let mut map = serde_json::Map::new();
+        for (k, v) in dict.iter() {
+            map.insert(k.extract::<String>()?, pyobj_to_value(&v)?);
+        }
+        Ok(serde_json::Value::Object(map))
+    } else {
+        Err(map_context_error(format!(
+            "unsupported type: {}",
+            obj.get_type().name()?
+        )))
+    }
+}
+
+fn pydict_to_context(dict: &Bound<'_, PyDict>) -> PyResult<Context> {
+    let value = pyobj_to_value(dict.as_any())?;
+    Context::from_value(value).map_err(map_context_error)
+}
+
 /// Template engine that loads templates from the filesystem.
 ///
 /// Templates are located via a glob pattern and kept in memory for fast
 /// repeated rendering. The syntax is Jinja2-compatible (Tera dialect).
+/// The engine is safe to share across threads.
 ///
 /// Args:
 ///     glob: Glob pattern for template files, e.g. ``"templates/**/*.html"``.
@@ -65,7 +128,7 @@ fn map_context_error(message: impl ToString) -> PyErr {
 ///     html = engine.render("index.html", {"title": "Home"})
 #[pyclass]
 struct TeraEngine {
-    tera: Tera,
+    tera: Arc<RwLock<Tera>>,
 }
 
 #[pymethods]
@@ -73,13 +136,14 @@ impl TeraEngine {
     #[new]
     fn new(glob: &str) -> PyResult<Self> {
         let tera = Tera::new(glob).map_err(map_tera_load_error)?;
-        Ok(TeraEngine { tera })
+        Ok(TeraEngine {
+            tera: Arc::new(RwLock::new(tera)),
+        })
     }
 
     /// Render a named template with the given context.
     ///
-    /// The template must have been loaded from disk when the engine was
-    /// created (i.e. it matched the glob pattern passed to ``__init__``).
+    /// The GIL is released during rendering so other Python threads are not blocked.
     ///
     /// Args:
     ///     template_name: Path of the template relative to the glob root,
@@ -98,17 +162,29 @@ impl TeraEngine {
     /// Example::
     ///
     ///     html = engine.render("email/welcome.html", {"user": "Alex"})
-    fn render(&self, template_name: &str, context: &Bound<'_, PyDict>) -> PyResult<String> {
+    fn render(
+        &self,
+        py: Python<'_>,
+        template_name: &str,
+        context: &Bound<'_, PyDict>,
+    ) -> PyResult<String> {
         let ctx = pydict_to_context(context)?;
-        self.tera
-            .render(template_name, &ctx)
-            .map_err(map_tera_render_error)
+        let tera = Arc::clone(&self.tera);
+        let template_name = template_name.to_owned();
+
+        py.detach(move || {
+            tera.read()
+                .map_err(map_lock_error)?
+                .render(&template_name, &ctx)
+        })
+        .map_err(map_tera_render_error)
     }
 
     /// Render a raw template string without loading from disk.
     ///
-    /// Useful for dynamic or user-supplied templates. The rendered result
-    /// is not cached — use :meth:`render` for hot paths.
+    /// Compiled templates are cached inside the engine by their source string,
+    /// so repeated calls with the same template skip recompilation.
+    /// The GIL is released during rendering.
     ///
     /// Args:
     ///     template_str: A Tera template string, e.g. ``"Hello, {{ name }}!"``.
@@ -125,48 +201,59 @@ impl TeraEngine {
     /// Example::
     ///
     ///     out = engine.render_str("{{ x }} + {{ y }} = {{ x + y }}", {"x": 1, "y": 2})
-    fn render_str(&self, template_str: &str, context: &Bound<'_, PyDict>) -> PyResult<String> {
+    fn render_str(
+        &self,
+        py: Python<'_>,
+        template_str: &str,
+        context: &Bound<'_, PyDict>,
+    ) -> PyResult<String> {
         let ctx = pydict_to_context(context)?;
-        Tera::one_off(template_str, &ctx, true)
-            .map_err(map_tera_render_error)
+        let tera = Arc::clone(&self.tera);
+        let template_str = template_str.to_owned();
+        let key = inline_template_key(&template_str);
+
+        py.detach(move || {
+            let needs_insert = tera
+                .read()
+                .map_err(map_lock_error)?
+                .get_template(&key)
+                .is_err();
+            if needs_insert {
+                tera.write()
+                    .map_err(map_lock_error)?
+                    .add_raw_template(&key, &template_str)?;
+            }
+
+            tera.read().map_err(map_lock_error)?.render(&key, &ctx)
+        })
+        .map_err(map_tera_render_error)
     }
 
     /// Return the list of currently loaded template names.
     ///
     /// Returns:
-    ///     list[str]: List of loaded template names.
+    ///     list[str]: List of loaded template names, excluding cached inline templates.
     ///
     /// Example::
     ///
     ///     engine = TeraEngine("templates/**/*.html")
     ///     sorted(engine.templates())
-    fn templates(&self) -> Vec<String> {
-        self.tera
+    fn templates(&self) -> PyResult<Vec<String>> {
+        Ok(self
+            .tera
+            .read()
+            .map_err(map_lock_py_error)?
             .get_template_names()
+            .filter(|n| !n.starts_with("__inline__"))
             .map(str::to_owned)
-            .collect()
+            .collect())
     }
-}
-
-fn pydict_to_context(dict: &Bound<'_, PyDict>) -> PyResult<Context> {
-    let py = dict.py();
-    let json_str: String = py
-        .import("json")
-        .map_err(|e| map_context_error(e))?
-        .call_method1("dumps", (dict,))
-        .map_err(|e| map_context_error(e))?
-        .extract()
-        .map_err(|e| map_context_error(e))?;
-    let value: serde_json::Value =
-        serde_json::from_str(&json_str).map_err(map_context_error)?;
-    Context::from_value(value).map_err(map_context_error)
 }
 
 /// Render a template string without creating an engine.
 ///
-/// There is no caching — every
-/// call parses and renders the template from scratch. For repeated rendering
-/// of the same template prefer :class:`TeraEngine`.
+/// There is no caching — every call parses and renders the template from
+/// scratch. For repeated rendering of the same template prefer :class:`TeraEngine`.
 ///
 /// Args:
 ///     template_str: A Tera template string, e.g. ``"Hello, {{ name }}!"``.
@@ -186,9 +273,12 @@ fn pydict_to_context(dict: &Bound<'_, PyDict>) -> PyResult<Context> {
 ///     out = render_str("Hello, {{ name }}! You have {{ count }} messages.",
 ///                      {"name": "Alex", "count": 42})
 #[pyfunction]
-fn render_str(template_str: &str, context: &Bound<'_, PyDict>) -> PyResult<String> {
+fn render_str(py: Python<'_>, template_str: &str, context: &Bound<'_, PyDict>) -> PyResult<String> {
     let ctx = pydict_to_context(context)?;
-    Tera::one_off(template_str, &ctx, true).map_err(map_tera_render_error)
+    let template_str = template_str.to_owned();
+
+    py.detach(move || Tera::one_off(&template_str, &ctx, true))
+        .map_err(map_tera_render_error)
 }
 
 #[pymodule]
@@ -200,7 +290,10 @@ fn teraplate(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("TeraplateError", py.get_type::<TeraplateError>())?;
     m.add("TemplateLoadError", py.get_type::<TemplateLoadError>())?;
     m.add("TemplateRenderError", py.get_type::<TemplateRenderError>())?;
-    m.add("TemplateNotFoundError", py.get_type::<TemplateNotFoundError>())?;
+    m.add(
+        "TemplateNotFoundError",
+        py.get_type::<TemplateNotFoundError>(),
+    )?;
     m.add("ContextError", py.get_type::<ContextError>())?;
     Ok(())
 }
@@ -229,7 +322,10 @@ mod tests {
             ("TeraplateError", py.get_type::<TeraplateError>()),
             ("TemplateLoadError", py.get_type::<TemplateLoadError>()),
             ("TemplateRenderError", py.get_type::<TemplateRenderError>()),
-            ("TemplateNotFoundError", py.get_type::<TemplateNotFoundError>()),
+            (
+                "TemplateNotFoundError",
+                py.get_type::<TemplateNotFoundError>(),
+            ),
             ("ContextError", py.get_type::<ContextError>()),
         ]
         .into_py_dict(py)
@@ -289,6 +385,7 @@ mod tests {
             context.set_item("count", 3)?;
 
             let result = render_str(
+                py,
                 "Hello, {{ user.name }}! You have {{ count }} messages.",
                 &context,
             )?;
@@ -349,7 +446,7 @@ mod tests {
             context.set_item("page_title", "Projects")?;
             context.set_item("items", vec!["teraplate", "tera"])?;
 
-            let result = engine.render("index.html", &context)?;
+            let result = engine.render(py, "index.html", &context)?;
 
             assert!(result.contains("<title>Projects</title>"));
             assert!(result.contains("[teraplate][tera]"));
@@ -361,15 +458,21 @@ mod tests {
     #[test]
     fn templates_returns_loaded_template_names() {
         let templates = TempTemplateDir::new();
-        templates.write("base.html", "<title>{% block title %}Default{% endblock title %}</title>");
+        templates.write(
+            "base.html",
+            "<title>{% block title %}Default{% endblock title %}</title>",
+        );
         templates.write("pages/index.html", "{% extends \"base.html\" %}");
 
         with_python(|_py| -> PyResult<()> {
             let engine = TeraEngine::new(&templates.glob())?;
-            let mut loaded = engine.templates();
+            let mut loaded = engine.templates()?;
             loaded.sort();
 
-            assert_eq!(loaded, vec!["base.html".to_string(), "pages/index.html".to_string()]);
+            assert_eq!(
+                loaded,
+                vec!["base.html".to_string(), "pages/index.html".to_string()]
+            );
             Ok(())
         })
         .unwrap();
@@ -379,12 +482,13 @@ mod tests {
     fn render_str_renders_without_disk_templates() {
         with_python(|py| -> PyResult<()> {
             let engine = TeraEngine {
-                tera: Tera::default(),
+                tera: Arc::new(RwLock::new(Tera::default())),
             };
             let context = PyDict::new(py);
             context.set_item("values", vec![1, 2, 3])?;
 
             let result = engine.render_str(
+                py,
                 "{% for value in values %}{{ value }}{% if not loop.last %}, {% endif %}{% endfor %}",
                 &context,
             )?;
@@ -399,11 +503,11 @@ mod tests {
     fn render_returns_template_not_found_error_for_missing_template() {
         with_python(|py| -> PyResult<()> {
             let engine = TeraEngine {
-                tera: Tera::default(),
+                tera: Arc::new(RwLock::new(Tera::default())),
             };
             let context = PyDict::new(py);
 
-            let error = engine.render("missing.html", &context).unwrap_err();
+            let error = engine.render(py, "missing.html", &context).unwrap_err();
 
             assert!(error.is_instance_of::<TemplateNotFoundError>(py));
             Ok(())
@@ -418,7 +522,7 @@ mod tests {
             let context = PyDict::new(py);
             context.set_item("value", object)?;
 
-            let error = render_str("{{ value }}", &context).unwrap_err();
+            let error = render_str(py, "{{ value }}", &context).unwrap_err();
 
             assert!(error.is_instance_of::<ContextError>(py));
             assert!(error.is_instance_of::<TeraplateError>(py));
@@ -432,10 +536,33 @@ mod tests {
         with_python(|py| -> PyResult<()> {
             let context = PyDict::new(py);
 
-            let error = render_str("{% if user %}", &context).unwrap_err();
+            let error = render_str(py, "{% if user %}", &context).unwrap_err();
 
             assert!(error.is_instance_of::<TemplateRenderError>(py));
             assert!(error.is_instance_of::<TeraplateError>(py));
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn render_str_caches_compiled_template_on_engine() {
+        with_python(|py| -> PyResult<()> {
+            let engine = TeraEngine {
+                tera: Arc::new(RwLock::new(Tera::default())),
+            };
+            let context = PyDict::new(py);
+            context.set_item("name", "Alex")?;
+            let tmpl = "Hello, {{ name }}!";
+
+            let first = engine.render_str(py, tmpl, &context)?;
+            let second = engine.render_str(py, tmpl, &context)?;
+
+            assert_eq!(first, "Hello, Alex!");
+            assert_eq!(second, "Hello, Alex!");
+
+            // inline templates should not appear in templates()
+            assert!(engine.templates()?.is_empty());
             Ok(())
         })
         .unwrap();
