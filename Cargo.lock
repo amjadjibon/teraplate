@@ -716,7 +716,7 @@ dependencies = [
 
 [[package]]
 name = "teraplate"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "pyo3",
  "serde_json",
