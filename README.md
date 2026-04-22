@@ -1,13 +1,13 @@
-# tera-py
+# teraplate
 
 Python bindings for the [Tera](https://github.com/Keats/tera) template engine, built with Rust, [PyO3](https://github.com/PyO3/pyo3), and [Maturin](https://github.com/PyO3/maturin).
 
-`tera_py` exposes a small Python API over Tera's Jinja2-like template syntax: variables, filters, loops, conditionals, inheritance, and macros.
+`teraplate` exposes a small Python API over Tera's Jinja2-like template syntax: variables, filters, loops, conditionals, inheritance, and macros.
 
 ## Features
 
 - Render named templates loaded from a filesystem glob
-- Render inline template strings with `tera_py.render_str(...)`
+- Render inline template strings with `teraplate.render_str(...)`
 - Render inline strings on an existing engine with `engine.render_str(...)`
 - Inspect loaded template names with `engine.templates()`
 - Accept plain Python dictionaries as context
@@ -24,13 +24,13 @@ Python bindings for the [Tera](https://github.com/Keats/tera) template engine, b
 Install from PyPI:
 
 ```bash
-pip install tera-py
+pip install teraplate
 ```
 
 Install with `uv`:
 
 ```bash
-uv add tera-py
+uv add teraplate
 ```
 
 Build from source:
@@ -46,9 +46,9 @@ uv run maturin develop --release
 ### Module-level inline render
 
 ```python
-import tera_py
+import teraplate
 
-out = tera_py.render_str(
+out = teraplate.render_str(
     "Hello, {{ name }}! You have {{ count }} messages.",
     {"name": "Alex", "count": 42},
 )
@@ -60,16 +60,16 @@ print(out)
 ### File-based rendering
 
 ```python
-import tera_py
+import teraplate
 
-engine = tera_py.TeraEngine("examples/templates/**/*")
+engine = teraplate.TeraEngine("examples/templates/**/*")
 html = engine.render(
     "index.html",
     {
         "page_title": "My Projects",
         "user": {"name": "Alex"},
         "items": [
-            {"name": "tera_py", "badge": "new", "tags": ["rust", "python"]},
+            {"name": "teraplate", "badge": "new", "tags": ["rust", "python"]},
             {"name": "tera", "badge": None, "tags": ["templates"]},
         ],
     },
@@ -81,9 +81,9 @@ print(html)
 ### Inline render on an existing engine
 
 ```python
-import tera_py
+import teraplate
 
-engine = tera_py.TeraEngine("examples/templates/**/*")
+engine = teraplate.TeraEngine("examples/templates/**/*")
 out = engine.render_str(
     "{% for s in scores %}{{ s.name }}: {{ s.score }}{% if not loop.last %} | {% endif %}{% endfor %}",
     {"scores": [{"name": "Alice", "score": 95}, {"name": "Bob", "score": 87}]},
@@ -95,12 +95,12 @@ print(out)
 
 ## API
 
-### `tera_py.TeraEngine(glob: str)`
+### `teraplate.TeraEngine(glob: str)`
 
 Loads templates from a glob pattern.
 
 ```python
-engine = tera_py.TeraEngine("examples/templates/**/*")
+engine = teraplate.TeraEngine("examples/templates/**/*")
 ```
 
 Raises `TemplateLoadError` if the glob is invalid or any matched template cannot be parsed.
@@ -131,19 +131,19 @@ Returns the names of templates currently loaded in the engine.
 loaded = sorted(engine.templates())
 ```
 
-### `tera_py.render_str(template_str: str, context: dict) -> str`
+### `teraplate.render_str(template_str: str, context: dict) -> str`
 
 Renders a raw template string without creating an engine.
 
 ```python
-out = tera_py.render_str("{{ x }} + {{ y }} = {{ x + y }}", {"x": 1, "y": 2})
+out = teraplate.render_str("{{ x }} + {{ y }} = {{ x + y }}", {"x": 1, "y": 2})
 ```
 
 ## Exceptions
 
-`tera_py` exports Python exception types so callers can catch specific failures:
+`teraplate` exports Python exception types so callers can catch specific failures:
 
-- `TeraPyError`: base exception for package-specific errors
+- `TeraplateError`: base exception for package-specific errors
 - `TemplateLoadError`: templates could not be loaded or parsed from disk
 - `TemplateRenderError`: rendering failed
 - `TemplateNotFoundError`: a named template was not found
@@ -161,7 +161,7 @@ If you pass non-JSON Python objects, rendering will fail.
 
 ## Template Syntax
 
-`tera_py` uses Tera syntax, which is close to Jinja2.
+`teraplate` uses Tera syntax, which is close to Jinja2.
 
 ### Variables
 
@@ -252,10 +252,10 @@ python examples/render.py
 tera-py/
 ├── Cargo.toml
 ├── pyproject.toml
-├── tera_py/
+├── teraplate/
 │   ├── __init__.py
 │   ├── py.typed
-│   └── tera_py.pyi
+│   └── teraplate.pyi
 ├── src/
 │   └── lib.rs
 └── examples/

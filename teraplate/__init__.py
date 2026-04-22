@@ -1,28 +1,28 @@
 """
-tera-py — Python bindings for the Tera template engine, powered by Rust and PyO3.
+teraplate — Python bindings for the Tera template engine, powered by Rust and PyO3.
 
 Tera uses Jinja2-compatible syntax: ``{{ variable }}``, ``{% for %}``,
 ``{% if %}``, template inheritance, filters, and macros.
 
 Quick start::
 
-    import tera_py
+    import teraplate
 
     # Inline render — no engine needed
-    out = tera_py.render_str("Hello, {{ name }}!", {"name": "Alex"})
+    out = teraplate.render_str("Hello, {{ name }}!", {"name": "Alex"})
 
     # File-based engine
-    engine = tera_py.TeraEngine("templates/**/*.html")
+    engine = teraplate.TeraEngine("templates/**/*.html")
     html = engine.render("index.html", {"title": "Home"})
 
     # Inline string render on an existing engine
     html = engine.render_str("<b>{{ msg }}</b>", {"msg": "hi"})
 """
 
-from .tera_py import TeraEngine, render_str
-from .tera_py import (
+from .teraplate import TeraEngine, render_str
+from .teraplate import (
     ContextError,
-    TeraPyError,
+    TeraplateError,
     TemplateLoadError,
     TemplateNotFoundError,
     TemplateRenderError,
@@ -30,7 +30,7 @@ from .tera_py import (
 
 __all__ = [
     "ContextError",
-    "TeraPyError",
+    "TeraplateError",
     "TemplateLoadError",
     "TemplateNotFoundError",
     "TemplateRenderError",

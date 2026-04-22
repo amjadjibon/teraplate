@@ -147,6 +147,7 @@ jobs:
     name: Release
     runs-on: ubuntu-latest
     needs: [linux, musllinux, windows, macos, sdist]
+    environment: pypi
     permissions:
       id-token: write
       contents: write

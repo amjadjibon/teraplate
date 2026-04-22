@@ -1,9 +1,9 @@
-import tera_py
+import teraplate
 from pathlib import Path
 
 TEMPLATES = str(Path(__file__).parent / "templates/**/*")
 
-engine = tera_py.TeraEngine(TEMPLATES)
+engine = teraplate.TeraEngine(TEMPLATES)
 
 
 def render_index():
@@ -11,7 +11,7 @@ def render_index():
         "page_title": "My Projects",
         "user": {"name": "John"},
         "items": [
-            {"name": "tera_py",  "badge": "new",  "tags": ["rust", "python"]},
+            {"name": "teraplate",  "badge": "new",  "tags": ["rust", "python"]},
             {"name": "memsh",   "badge": None,   "tags": ["go", "shell"]},
             {"name": "tera",    "badge": None,   "tags": ["rust", "templates"]},
         ],
@@ -23,7 +23,7 @@ def render_index():
 def render_email():
     txt = engine.render("email.txt", {
         "subject": "Your weekly summary",
-        "app_name": "tera_py",
+        "app_name": "teraplate",
         "recipient": {"name": "John", "is_new": False},
         "events": [
             {"date": "2026-04-20", "description": "Published v0.1.0"},
@@ -35,11 +35,11 @@ def render_email():
 
 
 def render_string():
-    out = tera_py.render_str(
+    out = teraplate.render_str(
         "{{ items | length }} item(s): {% for i in items %}{{ i }}{% if not loop.last %}, {% endif %}{% endfor %}",
         {"items": ["Rust", "Python", "Tera"]},
     )
-    print("=== tera_py.render_str ===")
+    print("=== teraplate.render_str ===")
     print(out)
 
 

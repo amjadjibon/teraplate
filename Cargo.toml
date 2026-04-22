@@ -1,10 +1,10 @@
 [package]
-name = "tera-py"
+name = "teraplate"
 version = "0.1.0"
 edition = "2024"
 
 [lib]
-name = "tera_py"
+name = "teraplate"
 crate-type = ["cdylib"]
 
 [dependencies]

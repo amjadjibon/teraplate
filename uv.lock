@@ -52,7 +52,7 @@ wheels = [
 ]
 
 [[package]]
-name = "tera-py"
+name = "teraplate"
 source = { editable = "." }
 
 [package.dev-dependencies]

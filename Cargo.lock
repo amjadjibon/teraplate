@@ -715,7 +715,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tera-py"
+name = "teraplate"
 version = "0.1.0"
 dependencies = [
  "pyo3",

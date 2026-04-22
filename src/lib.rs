@@ -4,29 +4,29 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use tera::{Context, Error as TeraError, ErrorKind, Tera};
 
-create_exception!(tera_py, TeraPyError, PyException, "Base exception for tera_py.");
+create_exception!(teraplate, TeraplateError, PyException, "Base exception for teraplate.");
 create_exception!(
-    tera_py,
+    teraplate,
     TemplateLoadError,
-    TeraPyError,
+    TeraplateError,
     "Raised when templates cannot be loaded or parsed from disk."
 );
 create_exception!(
-    tera_py,
+    teraplate,
     TemplateRenderError,
-    TeraPyError,
+    TeraplateError,
     "Raised when template rendering fails."
 );
 create_exception!(
-    tera_py,
+    teraplate,
     TemplateNotFoundError,
     TemplateRenderError,
     "Raised when a named template cannot be found."
 );
 create_exception!(
-    tera_py,
+    teraplate,
     ContextError,
-    TeraPyError,
+    TeraplateError,
     "Raised when Python context data cannot be converted into Tera context."
 );
 
@@ -192,12 +192,12 @@ fn render_str(template_str: &str, context: &Bound<'_, PyDict>) -> PyResult<Strin
 }
 
 #[pymodule]
-fn tera_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn teraplate(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
 
     m.add_class::<TeraEngine>()?;
     m.add_function(wrap_pyfunction!(render_str, m)?)?;
-    m.add("TeraPyError", py.get_type::<TeraPyError>())?;
+    m.add("TeraplateError", py.get_type::<TeraplateError>())?;
     m.add("TemplateLoadError", py.get_type::<TemplateLoadError>())?;
     m.add("TemplateRenderError", py.get_type::<TemplateRenderError>())?;
     m.add("TemplateNotFoundError", py.get_type::<TemplateNotFoundError>())?;
@@ -226,7 +226,7 @@ mod tests {
 
     fn add_error_types<'py>(py: Python<'py>) -> Bound<'py, PyDict> {
         [
-            ("TeraPyError", py.get_type::<TeraPyError>()),
+            ("TeraplateError", py.get_type::<TeraplateError>()),
             ("TemplateLoadError", py.get_type::<TemplateLoadError>()),
             ("TemplateRenderError", py.get_type::<TemplateRenderError>()),
             ("TemplateNotFoundError", py.get_type::<TemplateNotFoundError>()),
@@ -243,7 +243,7 @@ mod tests {
     impl TempTemplateDir {
         fn new() -> Self {
             let unique = format!(
-                "pytera-tests-{}-{}",
+                "teraplate-tests-{}-{}",
                 std::process::id(),
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -305,7 +305,7 @@ mod tests {
             let ctx = add_error_types(py);
 
             py.run(
-                c"assert issubclass(TemplateLoadError, TeraPyError)\nassert issubclass(TemplateRenderError, TeraPyError)\nassert issubclass(TemplateNotFoundError, TemplateRenderError)\nassert issubclass(ContextError, TeraPyError)",
+                c"assert issubclass(TemplateLoadError, TeraplateError)\nassert issubclass(TemplateRenderError, TeraplateError)\nassert issubclass(TemplateNotFoundError, TemplateRenderError)\nassert issubclass(ContextError, TeraplateError)",
                 None,
                 Some(&ctx),
             )?;
@@ -347,12 +347,12 @@ mod tests {
             let engine = TeraEngine::new(&templates.glob())?;
             let context = PyDict::new(py);
             context.set_item("page_title", "Projects")?;
-            context.set_item("items", vec!["pytera", "tera"])?;
+            context.set_item("items", vec!["teraplate", "tera"])?;
 
             let result = engine.render("index.html", &context)?;
 
             assert!(result.contains("<title>Projects</title>"));
-            assert!(result.contains("[pytera][tera]"));
+            assert!(result.contains("[teraplate][tera]"));
             Ok(())
         })
         .unwrap();
@@ -421,7 +421,7 @@ mod tests {
             let error = render_str("{{ value }}", &context).unwrap_err();
 
             assert!(error.is_instance_of::<ContextError>(py));
-            assert!(error.is_instance_of::<TeraPyError>(py));
+            assert!(error.is_instance_of::<TeraplateError>(py));
             Ok(())
         })
         .unwrap();
@@ -435,7 +435,7 @@ mod tests {
             let error = render_str("{% if user %}", &context).unwrap_err();
 
             assert!(error.is_instance_of::<TemplateRenderError>(py));
-            assert!(error.is_instance_of::<TeraPyError>(py));
+            assert!(error.is_instance_of::<TeraplateError>(py));
             Ok(())
         })
         .unwrap();
